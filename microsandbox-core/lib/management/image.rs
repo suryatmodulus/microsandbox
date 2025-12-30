@@ -16,14 +16,15 @@ use indicatif::{ProgressBar, ProgressStyle};
 use microsandbox_utils::term::{self, MULTI_PROGRESS};
 use microsandbox_utils::{EXTRACTED_LAYER_SUFFIX, LAYERS_SUBDIR, OCI_DB_FILENAME, env};
 use oci_spec::image::Platform;
+#[cfg(feature = "cli")]
 use pin_project_lite::pin_project;
 use sqlx::{Pool, Sqlite};
+#[cfg(feature = "cli")]
+use std::task::Poll;
 use std::{
     ffi::{CStr, CString},
-    io::{self},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    task::Poll,
 };
 use tempfile::tempdir;
 #[cfg(feature = "cli")]
@@ -46,29 +47,12 @@ const EXTRACT_LAYERS_MSG: &str = "Extracting layers";
 // Functions
 //--------------------------------------------------------------------------------------------------
 
-/// Pulls an image or image group from a supported registry (Docker or Sandboxes.io).
-///
-/// This function handles pulling container images from different registries based on the provided
-/// parameters. It supports both single image pulls and image group pulls (for Sandboxes.io registry only).
-///
-/// For Sandboxes.io registry:
-/// - Library repository images are pulled from Docker registry for compatibility
-/// - Other namespaces are also pulled from Docker registry with a warning about potential future changes
+/// Pulls an image using whatever registry is configured.
 ///
 /// ## Arguments
 ///
-/// * `name` - The reference to the image or image group to pull
-/// * `image` - If true, indicates that a single image should be pulled
-/// * `image_group` - If true, indicates that an image group should be pulled (Sandboxes.io only)
-/// * `layer_path` - The path to store the layer files
-///
-/// ## Errors
-///
-/// Returns an error in the following cases:
-/// * Both `image` and `image_group` are true (invalid combination)
-/// * Image group pull is requested for a non-Sandboxes.io registry
-/// * Unsupported registry is specified
-/// * Registry-specific pull operations fail
+/// * `image` - The reference to the image to pull
+/// * `layer_output_dir` - The path to store the layer files
 ///
 /// # Examples
 ///
@@ -77,27 +61,27 @@ const EXTRACT_LAYERS_MSG: &str = "Extracting layers";
 /// use microsandbox_core::oci::Reference;
 /// use std::path::PathBuf;
 ///
-/// # #[tokio::main]
-/// # async fn main() -> anyhow::Result<()> {
-/// // Pull a single image from Docker registry
-/// image::pull("docker.io/library/ubuntu:latest".parse().unwrap(), true, false, None).await?;
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let layer_output_dir = Some(PathBuf::from("/custom/path"));
 ///
-/// // Pull an image from Sandboxes.io registry
-/// image::pull("sandboxes.io/library/alpine:latest".parse().unwrap(), true, false, None).await?;
+///     // Pull a single image from Docker registry
+///     image::pull("docker.io/library/ubuntu:latest".parse().unwrap(), layer_output_dir).await?;
 ///
-/// // Pull an image from the default registry (when no registry is specified in the reference)
-/// image::pull("nginx:latest".parse().unwrap(), true, false, None).await?;
+///     // Pull an image from the default registry (when no registry is specified in the reference)
+///     image::pull("nginx:latest".parse().unwrap(), layer_output_dir).await?;
 ///
-/// // You can set the OCI_REGISTRY_DOMAIN environment variable to specify your default registry
-/// std::env::set_var("OCI_REGISTRY_DOMAIN", "docker.io");
-/// image::pull("alpine:latest".parse().unwrap(), true, false, None).await?;
+///     // You can set the OCI_REGISTRY_DOMAIN environment variable to specify your default registry
+///     std::env::set_var("OCI_REGISTRY_DOMAIN", "docker.io");
+///     image::pull("alpine:latest".parse().unwrap(), layer_output_dir).await?;
 ///
-/// // Pull an image from Docker registry and store the layers in a custom directory
-/// image::pull("docker.io/library/ubuntu:latest".parse().unwrap(), true, Some(PathBuf::from("/custom/path"))).await?;
-/// # Ok(())
-/// # }
+///     // Pull an image from Docker registry and store the layers in a custom directory
+///     image::pull("docker.io/library/ubuntu:latest".parse().unwrap(), layer_output_dir).await?;
+///
+///     Ok(())
+/// }
 /// ```
-pub async fn pull(image: Reference, layer_path: Option<PathBuf>) -> MicrosandboxResult<()> {
+pub async fn pull(image: Reference, layer_output_dir: Option<PathBuf>) -> MicrosandboxResult<()> {
     let temp_download_dir = tempdir()?.into_path();
     tracing::info!(
         "temporary download directory: {}",
@@ -110,8 +94,8 @@ pub async fn pull(image: Reference, layer_path: Option<PathBuf>) -> Microsandbox
     let db = db::get_or_create_pool(&db_path, &db::OCI_DB_MIGRATOR).await?;
     let registry = Registry::new(temp_download_dir, db.clone(), Platform::default(), layer).await?;
 
-    // Use custom layer_path if specified, otherwise use default microsandbox layers directory
-    let layers_dir = layer_path.unwrap_or_else(|| microsandbox_home_path.join(LAYERS_SUBDIR));
+    // Use custom layer_output_dir if specified, otherwise use default microsandbox layers directory
+    let layers_dir = layer_output_dir.unwrap_or_else(|| microsandbox_home_path.join(LAYERS_SUBDIR));
     pull_image_and_extract(&registry, &db, &image, layers_dir).await
 }
 
@@ -601,8 +585,8 @@ async fn extract_layer(
         extract_dir.display()
     );
 
+    #[cfg(feature = "cli")]
     pin_project! {
-        #[cfg(feature = "cli")]
         struct ProgressReader<R> {
             #[pin]
             inner: R,
@@ -616,7 +600,7 @@ async fn extract_layer(
             self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
             buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
+        ) -> Poll<std::io::Result<()>> {
             let p = self.project();
             match p.inner.poll_read(cx, buf)? {
                 Poll::Ready(()) => {
@@ -674,16 +658,18 @@ async fn extract_layer(
 
     #[cfg(not(feature = "cli"))]
     {
-        use flate2::read::GzDecoder;
+        use async_compression::tokio::bufread::GzipDecoder;
+        use tokio::{fs::File, io::BufReader};
 
-        let file =
-            std::fs::File::open(layer_path).map_err(|e| MicrosandboxError::LayerHandling {
+        let file = File::open(layer_path)
+            .await
+            .map_err(|e| MicrosandboxError::LayerHandling {
                 source: e,
                 layer: file_name.to_string(),
             })?;
-        let decoder = GzDecoder::new(file);
+        let decoder = GzipDecoder::new(BufReader::new(file));
         let mut archive = Archive::new(decoder);
-        extract_tar_with_ownership_override(&mut archive, &extract_dir)?;
+        extract_tar_with_ownership_override(&mut archive, &extract_dir).await?;
     }
 
     tracing::info!(
