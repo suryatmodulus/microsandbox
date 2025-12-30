@@ -1963,7 +1963,7 @@ dependencies = [
 [[package]]
 name = "oci-client"
 version = "0.15.0"
-source = "git+ssh://git@github.com/toksdotdev/rust-oci-client.git?branch=toks%2Fstring-impl-for-enums#77bdd02a9cf79f250e731280f307b30e8d558a0d"
+source = "git+https://github.com/toksdotdev/rust-oci-client.git?branch=toks%2Fstring-impl-for-enums#e165654aecf842b3dd57d8b31268378e8d1884c0"
 dependencies = [
  "bytes",
  "chrono",
@@ -1987,8 +1987,8 @@ dependencies = [
 
 [[package]]
 name = "oci-spec"
-version = "0.8.3"
-source = "git+ssh://git@github.com/youki-dev/oci-spec-rs.git#a217db0c1dc4b650889887dc7c96c31310029e87"
+version = "0.8.4"
+source = "git+https://github.com/youki-dev/oci-spec-rs.git#d21e23b70876e47b8dacb10844c9a39ff77054cb"
 dependencies = [
  "const_format",
  "derive_builder",

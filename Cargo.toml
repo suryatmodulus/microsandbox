@@ -84,5 +84,5 @@ astral-tokio-tar = "0.5.6"
 async-compression = "0.4"
 
 [patch.crates-io]
-oci-spec = { git = "ssh://git@github.com/youki-dev/oci-spec-rs.git" }
-oci-client = { git = "ssh://git@github.com/toksdotdev/rust-oci-client.git", branch = "toks/string-impl-for-enums"}
+oci-spec = { git = "https://github.com/youki-dev/oci-spec-rs.git" }
+oci-client = { git = "https://github.com/toksdotdev/rust-oci-client.git", branch = "toks/string-impl-for-enums"}
