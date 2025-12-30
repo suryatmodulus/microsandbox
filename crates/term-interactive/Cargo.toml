@@ -1,0 +1,14 @@
+[package]
+name = "term-interactive"
+authors.workspace = true
+repository.workspace = true
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+indicatif = { workspace = true, optional = true }
+
+[features]
+default = ["cli"]
+cli = ["dep:indicatif"]

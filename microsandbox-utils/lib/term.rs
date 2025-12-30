@@ -1,16 +1,15 @@
 //! Module containing terminal utilities
 
-use indicatif::{MultiProgress, MultiProgressAlignment, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::{Arc, LazyLock};
-
+use term_interactive::progress::{MsbMultiProgress, MsbProgressTheme};
 //--------------------------------------------------------------------------------------------------
 // Constants
 //--------------------------------------------------------------------------------------------------
 
 /// The multi-progress bar for CLI visualizations
-pub static MULTI_PROGRESS: LazyLock<Arc<MultiProgress>> = LazyLock::new(|| {
-    let mp = MultiProgress::new();
-    mp.set_alignment(MultiProgressAlignment::Top);
+pub static MULTI_PROGRESS: LazyLock<Arc<MsbMultiProgress>> = LazyLock::new(|| {
+    let mp = MsbMultiProgress::with_theme(MsbProgressTheme::Default);
     Arc::new(mp)
 });
 

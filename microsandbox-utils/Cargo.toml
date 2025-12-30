@@ -25,6 +25,7 @@ libc.workspace = true
 indicatif.workspace = true
 console.workspace = true
 dirs.workspace = true
+term-interactive.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
