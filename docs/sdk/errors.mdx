@@ -1,0 +1,97 @@
+---
+title: Error Handling
+description: Typed errors and resource cleanup patterns
+icon: "triangle-exclamation"
+---
+
+Both SDKs surface typed errors so you can match on specific failure modes instead of parsing strings. Rust has an `Error` enum and TypeScript errors carry a type tag prefix (e.g. `[ExecTimeout]`, `[Runtime]`) in the error message.
+
+## Matching errors
+
+<CodeGroup>
+```rust Rust
+use microsandbox::{Sandbox, Error};
+
+async fn get_or_create(name: &str) -> Result<Sandbox, Error> {
+    match Sandbox::get(name).await {
+        Ok(handle) => handle.start().await,
+        Err(Error::SandboxNotFound(_)) => {
+            Sandbox::builder(name).image("python:3.12").create().await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+match sb.exec("python", ["script.py"]).await {
+    Ok(output) if output.status().success => {
+        println!("{}", output.stdout()?);
+    }
+    Ok(output) => {
+        eprintln!("Exit {}: {}", output.status().code, output.stderr()?);
+    }
+    Err(Error::ExecTimeout) => eprintln!("Timed out"),
+    Err(Error::Runtime(msg)) => eprintln!("Runtime: {msg}"),
+    Err(e) => return Err(e),
+}
+```
+
+```typescript TypeScript
+import { Sandbox } from 'microsandbox'
+
+try {
+    const output = await sb.exec("python", ["script.py"])
+    if (!output.success) {
+        console.error(`Failed (exit ${output.code}):`, output.stderr())
+    }
+} catch (e) {
+    if (e instanceof Error) {
+        // Error messages are prefixed with a type tag, e.g. "[ExecTimeout] ..."
+        if (e.message.startsWith("[ExecTimeout]")) {
+            console.error("Timed out")
+        } else if (e.message.startsWith("[Runtime]")) {
+            console.error("Runtime:", e.message)
+        } else {
+            throw e
+        }
+    } else {
+        throw e
+    }
+}
+```
+
+</CodeGroup>
+
+## Resource cleanup
+
+Sandboxes hold compute resources, so release them when done. In Rust, `Drop` handles cleanup when the sandbox goes out of scope. In TypeScript, use `try`/`finally`.
+
+<CodeGroup>
+```rust Rust
+use microsandbox::Sandbox;
+
+// Sandbox implements Drop, so resources are released when `sb` goes out of scope.
+// For explicit control, call stop() or kill().
+{
+    let sb = Sandbox::builder("temp")
+        .image("python:3.12")
+        .create()
+        .await?;
+
+    let output = sb.exec("python", ["-c", "print('hello')"]).await?;
+} // sb is dropped here, resources are cleaned up
+```
+
+```typescript TypeScript
+async function runTemporary(): Promise<string> {
+    const sb = await Sandbox.create({ name: "temp", image: "python:3.12" })
+    try {
+        const out = await sb.exec("python", ["-c", "print('hello')"])
+        return out.stdout()
+    } finally {
+        await sb.kill().catch(() => {})
+        await Sandbox.remove("temp").catch(() => {})
+    }
+}
+```
+
+</CodeGroup>

@@ -1,0 +1,157 @@
+---
+title: Commands
+description: Execute commands, stream output, and interact with sandboxes
+icon: "terminal"
+---
+
+Command execution doesn't use SSH or the network. There's a dedicated channel between the host and a guest agent running inside the VM, completely separate from the sandbox's network stack. The agent spawns processes, streams output back, and reports exit codes.
+
+One nice consequence: `exec` works even when a sandbox has networking fully disabled.
+
+## Execute a command
+
+Run a command and wait for it to complete. You get back the exit code, stdout, and stderr.
+
+<CodeGroup>
+```rust Rust
+let output = sb.exec("python", ["-c", "print('hello')"]).await?;
+println!("{}", output.stdout()?);     // "hello\n"
+println!("{}", output.status().code); // 0
+```
+
+```typescript TypeScript
+const output = await sb.exec("python", ["-c", "print('hello')"])
+console.log(output.stdout())  // "hello\n"
+console.log(output.success)   // true
+console.log(output.code)      // 0
+```
+
+</CodeGroup>
+
+## Execution options
+
+These options apply to a single execution and don't change the sandbox's defaults.
+
+<CodeGroup>
+```rust Rust
+let output = sb.exec("python", |e| e
+    .args(["compute.py"])
+    .cwd("/app")
+    .env("PYTHONPATH", "/app/lib")
+    .timeout(Duration::from_secs(30))
+    .rlimit(RlimitResource::Nofile, 1024)
+).await?;
+```
+
+```typescript TypeScript
+const output = await sb.execWithConfig({
+    cmd: "python",
+    args: ["compute.py"],
+    cwd: "/app",
+    env: { PYTHONPATH: "/app/lib" },
+    timeoutMs: 30_000,
+})
+```
+
+</CodeGroup>
+
+## Shell commands
+
+Run a command through the sandbox's configured shell (defaults to `/bin/sh`). Useful for pipelines, redirects, and other shell syntax that `exec` doesn't interpret.
+
+<CodeGroup>
+```rust Rust
+let output = sb.shell("ls -la /app && echo done").await?;
+```
+
+```typescript TypeScript
+const output = await sb.shell("ls -la /app && echo done")
+```
+
+</CodeGroup>
+
+## Stream output
+
+For long-running processes or large output, streaming gives you stdout, stderr, and exit events as they happen instead of buffering everything until the command finishes.
+
+<CodeGroup>
+```rust Rust
+let mut handle = sb.exec_stream("tail", ["-f", "/var/log/app.log"]).await?;
+
+while let Some(event) = handle.recv().await {
+    match event {
+        ExecEvent::Stdout(data) => print!("{}", String::from_utf8_lossy(&data)),
+        ExecEvent::Stderr(data) => eprint!("{}", String::from_utf8_lossy(&data)),
+        ExecEvent::Exited { code } => break,
+        _ => {}
+    }
+}
+```
+
+```typescript TypeScript
+const handle = await sb.execStream("tail", ["-f", "/var/log/app.log"])
+
+let event
+while ((event = await handle.recv()) !== null) {
+    switch (event.eventType) {
+        case 'stdout': process.stdout.write(event.data); break
+        case 'stderr': process.stderr.write(event.data); break
+        case 'exited': console.log(`Exited: ${event.code}`); break
+    }
+}
+```
+
+</CodeGroup>
+
+## Interactive attach
+
+Bridges your terminal directly to a process inside the sandbox for a fully interactive PTY session. Useful for debugging, running REPLs, or anything that expects a real terminal.
+
+<CodeGroup>
+```rust Rust
+let exit_code = sb.attach_shell().await?;
+
+let exit_code = sb.attach("python", |a| a
+    .env("DEBUG", "1")
+    .cwd("/app")
+    .detach_keys("ctrl-q")
+).await?;
+```
+
+```typescript TypeScript
+// Attach to the default shell
+const exitCode = await sb.attach()
+
+// Attach to a specific command with custom detach keys
+await sb.attach("bash", a => a.env("DEBUG", "1").cwd("/app").detachKeys("ctrl-q"))
+```
+
+</CodeGroup>
+
+<Tip>
+  Press `Ctrl+]` (or your configured detach keys) to detach from the session without stopping the process. The process keeps running inside the VM and you can reattach later via its session ID.
+</Tip>
+
+## Write stdin
+
+Streaming handles can also accept stdin. Enable `stdin_pipe` and write bytes to it. Combined with `tty: true`, this lets you drive interactive processes programmatically.
+
+<CodeGroup>
+```rust Rust
+let mut handle = sb.exec_stream("python", |e| e.stdin_pipe().tty(true)).await?;
+let stdin = handle.take_stdin().unwrap();
+stdin.write(b"print('hello')\n").await?;
+stdin.write(b"exit()\n").await?;
+handle.wait().await?;
+```
+
+```typescript TypeScript
+const handle = await sb.execStream("python")
+const stdin = await handle.takeStdin()
+await stdin.write(Buffer.from("print('hello')\n"))
+await stdin.write(Buffer.from("exit()\n"))
+await stdin.close()
+await handle.wait()
+```
+
+</CodeGroup>

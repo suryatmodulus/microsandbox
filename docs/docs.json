@@ -1,0 +1,132 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple",
+  "name": "microsandbox",
+  "logo": {
+    "light": "/images/microsandbox-banner-light(1).svg",
+    "dark": "/images/microsandbox-banner-dark(1).svg",
+    "href": "https://microsandbox.dev"
+  },
+  "favicon": "/logo/light.svg",
+  "colors": {
+    "primary": "#BF84FE",
+    "light": "#BF84FE",
+    "dark": "#BF84FE"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/superradcompany/microsandbox"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "icon": "rocket",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Sandboxes",
+            "icon": "box",
+            "pages": [
+              "sandboxes/overview",
+              "sandboxes/lifecycle",
+              "sandboxes/commands",
+              "sandboxes/filesystem",
+              "sandboxes/volumes",
+              "sandboxes/networking"
+            ]
+          },
+          {
+            "group": "Images",
+            "icon": "layer-group",
+            "pages": [
+              "images/overview",
+              "images/disk-images"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "SDK Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "icon": "flag",
+            "pages": [
+              "sdk/overview"
+            ]
+          },
+          {
+            "group": "Core",
+            "icon": "circle",
+            "pages": [
+              "sdk/sandbox",
+              "sdk/execution",
+              "sdk/filesystem",
+              "sdk/volumes"
+            ]
+          },
+          {
+            "group": "Features",
+            "icon": "puzzle-piece",
+            "pages": [
+              "sdk/snapshots",
+              "sdk/networking",
+              "sdk/events"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "icon": "gear",
+            "pages": [
+              "sdk/scripts",
+              "sdk/metrics",
+              "sdk/errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "CLI",
+            "icon": "terminal",
+            "pages": [
+              "cli/overview",
+              "cli/sandbox-commands",
+              "cli/volume-commands",
+              "cli/image-commands"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "integrations": {
+    "posthog": {
+      "apiKey": "phc_mMJPTEQbarHl4JMTdFBcgw5v612dmQrvKv5mcK3KJ3O",
+      "apiHost": "https://g.microsandbox.dev"
+    }
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "description": "Every agent deserves its own machine",
+  "footer": {
+    "socials": {
+      "github": "https://github.com/superradcompany/microsandbox",
+      "discord": "https://discord.gg/NQMWDfp7",
+      "linkedin": "https://www.linkedin.com/company/super-rad-company",
+      "x": "https://x.com/microsandbox"
+    }
+  }
+}

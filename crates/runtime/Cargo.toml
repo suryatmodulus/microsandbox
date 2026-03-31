@@ -1,0 +1,39 @@
+[package]
+name = "microsandbox-runtime"
+description = "Runtime library for the microsandbox sandbox process and microVM entry points."
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[lib]
+name = "microsandbox_runtime"
+path = "lib/lib.rs"
+
+[features]
+default = ["prebuilt", "net"]
+prebuilt = ["microsandbox-filesystem/prebuilt"]
+net = ["dep:microsandbox-network", "msb_krun/net"]
+
+[dependencies]
+bytes = { workspace = true }
+chrono.workspace = true
+clap = { workspace = true, features = ["derive"] }
+crossbeam-queue = { workspace = true }
+libc.workspace = true
+microsandbox-db = { version = "0.3.7", path = "../db" }
+microsandbox-filesystem = { version = "0.3.7", path = "../filesystem", default-features = false }
+microsandbox-network = { version = "0.3.7", path = "../network", optional = true }
+microsandbox-protocol = { version = "0.3.7", path = "../protocol" }
+microsandbox-utils = { version = "0.3.7", path = "../utils" }
+msb_krun = { version = "0.1.9", features = ["blk"] }
+nix = { workspace = true, features = ["process", "signal"] }
+rustls = { workspace = true }
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

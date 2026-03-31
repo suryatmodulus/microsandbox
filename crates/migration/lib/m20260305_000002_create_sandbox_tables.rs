@@ -1,0 +1,188 @@
+//! Migration: Create sandbox tables (sandboxes, runs, sandbox_metrics).
+
+use sea_orm_migration::prelude::*;
+
+//--------------------------------------------------------------------------------------------------
+// Types
+//--------------------------------------------------------------------------------------------------
+
+pub struct Migration;
+
+//--------------------------------------------------------------------------------------------------
+// Types: Identifiers
+//--------------------------------------------------------------------------------------------------
+
+#[derive(Iden)]
+enum Sandbox {
+    Table,
+    Id,
+    Name,
+    Config,
+    Status,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum Run {
+    Table,
+    Id,
+    SandboxId,
+    Pid,
+    Status,
+    ExitCode,
+    ExitSignal,
+    TerminationReason,
+    TerminationDetail,
+    SignalsSent,
+    StartedAt,
+    TerminatedAt,
+}
+
+#[derive(Iden)]
+enum SandboxMetric {
+    Table,
+    Id,
+    SandboxId,
+    CpuPercent,
+    MemoryBytes,
+    DiskReadBytes,
+    DiskWriteBytes,
+    NetRxBytes,
+    NetTxBytes,
+    SampledAt,
+    CreatedAt,
+}
+
+//--------------------------------------------------------------------------------------------------
+// Trait Implementations
+//--------------------------------------------------------------------------------------------------
+
+impl MigrationName for Migration {
+    fn name(&self) -> &str {
+        "m20260305_000002_create_sandbox_tables"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // sandboxes
+        manager
+            .create_table(
+                Table::create()
+                    .table(Sandbox::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(Sandbox::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(Sandbox::Name).text().not_null().unique_key())
+                    .col(ColumnDef::new(Sandbox::Config).text().not_null())
+                    .col(ColumnDef::new(Sandbox::Status).text().not_null())
+                    .col(ColumnDef::new(Sandbox::CreatedAt).date_time())
+                    .col(ColumnDef::new(Sandbox::UpdatedAt).date_time())
+                    .to_owned(),
+            )
+            .await?;
+
+        // runs
+        manager
+            .create_table(
+                Table::create()
+                    .table(Run::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(Run::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(Run::SandboxId).integer().not_null())
+                    .col(ColumnDef::new(Run::Pid).integer())
+                    .col(ColumnDef::new(Run::Status).text().not_null())
+                    .col(ColumnDef::new(Run::ExitCode).integer())
+                    .col(ColumnDef::new(Run::ExitSignal).integer())
+                    .col(ColumnDef::new(Run::TerminationReason).text())
+                    .col(ColumnDef::new(Run::TerminationDetail).text())
+                    .col(ColumnDef::new(Run::SignalsSent).text())
+                    .col(ColumnDef::new(Run::StartedAt).date_time())
+                    .col(ColumnDef::new(Run::TerminatedAt).date_time())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(Run::Table, Run::SandboxId)
+                            .to(Sandbox::Table, Sandbox::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        // sandbox_metrics
+        manager
+            .create_table(
+                Table::create()
+                    .table(SandboxMetric::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(SandboxMetric::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(SandboxMetric::SandboxId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(SandboxMetric::CpuPercent).float())
+                    .col(ColumnDef::new(SandboxMetric::MemoryBytes).big_integer())
+                    .col(ColumnDef::new(SandboxMetric::DiskReadBytes).big_integer())
+                    .col(ColumnDef::new(SandboxMetric::DiskWriteBytes).big_integer())
+                    .col(ColumnDef::new(SandboxMetric::NetRxBytes).big_integer())
+                    .col(ColumnDef::new(SandboxMetric::NetTxBytes).big_integer())
+                    .col(ColumnDef::new(SandboxMetric::SampledAt).date_time())
+                    .col(ColumnDef::new(SandboxMetric::CreatedAt).date_time())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(SandboxMetric::Table, SandboxMetric::SandboxId)
+                            .to(Sandbox::Table, Sandbox::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        // Composite index for time-range queries on sandbox metrics
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_sandbox_metrics_sandbox_sampled")
+                    .table(SandboxMetric::Table)
+                    .col(SandboxMetric::SandboxId)
+                    .col(SandboxMetric::SampledAt)
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(SandboxMetric::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Run::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Sandbox::Table).to_owned())
+            .await?;
+        Ok(())
+    }
+}

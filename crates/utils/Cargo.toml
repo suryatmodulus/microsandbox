@@ -1,0 +1,16 @@
+[package]
+name = "microsandbox-utils"
+description = "Shared constants and utilities for the microsandbox project."
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[lib]
+path = "lib/lib.rs"
+
+[dependencies]
+crc32c.workspace = true
+libc.workspace = true
+scopeguard.workspace = true

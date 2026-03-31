@@ -1,0 +1,85 @@
+---
+title: OCI Images
+description: Use standard container images from any registry
+icon: "layer-group"
+---
+
+microsandbox uses standard OCI container images as root filesystems. Docker Hub, GHCR, ECR, GCR, any OCI-compatible registry works. Existing images run as-is.
+
+When you specify an image like `python:3.12`, microsandbox pulls the manifest, downloads the layers in parallel, and stacks them as a copy-on-write filesystem. Changes inside the sandbox don't modify the base image. Two sandboxes using the same image share the same cached layers on disk.
+
+## Pull policies
+
+By default, microsandbox pulls an image only if it isn't already cached. You can change this behavior.
+
+| Policy | Behavior |
+|--------|----------|
+| `IfMissing` | Pull only if not cached (default) |
+| `Always` | Always check the registry for updates |
+| `Never` | Use local cache only, fail if missing |
+
+<CodeGroup>
+```rust Rust
+let sb = Sandbox::builder("worker")
+    .image("python:3.12")
+    .pull_policy(PullPolicy::Always)
+    .create()
+    .await?;
+```
+
+```typescript TypeScript
+import { PullPolicy, Sandbox } from 'microsandbox'
+
+const sb = await Sandbox.create({
+    name: "worker",
+    image: "python:3.12",
+    pullPolicy: PullPolicy.Always,
+})
+```
+</CodeGroup>
+
+<Tip>
+  Once an image reference is resolved, microsandbox pins the exact layers. `python:3.12` is resolved to a specific set of immutable layers at first pull. Subsequent `start()` calls use the pinned layers without re-resolving the mutable tag, so your sandbox is reproducible even if the upstream tag moves.
+</Tip>
+
+## Private registries
+
+Authenticate to private registries by passing credentials.
+
+<CodeGroup>
+```rust Rust
+let sb = Sandbox::builder("worker")
+    .image("registry.corp.io/team/app:latest")
+    .registry_auth(RegistryAuth::Basic {
+        username: "deploy".into(),
+        password: std::env::var("REGISTRY_PASSWORD")?,
+    })
+    .pull_policy(PullPolicy::Always)
+    .create()
+    .await?;
+```
+
+```typescript TypeScript
+const sb = await Sandbox.create({
+    name: "worker",
+    image: "registry.corp.io/team/app:latest",
+    registryAuth: { username: "deploy", password: process.env.REGISTRY_TOKEN },
+    pullPolicy: PullPolicy.Always,
+})
+```
+</CodeGroup>
+
+## Image storage
+
+Images are cached in the global microsandbox home directory:
+
+| Path | Description |
+|------|-------------|
+| `~/.microsandbox/cache/layers/` | Downloaded and extracted image layers |
+| `~/.microsandbox/db/` | Database tracking image metadata and digests |
+
+Layers are content-addressable and deduplicated. If `python:3.12` and `python:3.11` share a base layer, it's stored once.
+
+<Tip>
+  Use `msb pull` from the CLI to pre-pull images before creating sandboxes. This avoids blocking on a download during `Sandbox.create`.
+</Tip>

@@ -1,0 +1,460 @@
+//! Sandbox configuration.
+
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
+
+use microsandbox_runtime::{logging::LogLevel, policy::SandboxPolicy};
+use serde::{Deserialize, Serialize};
+
+use microsandbox_image::{ImageConfig, PullPolicy, RegistryAuth};
+
+use super::types::{Patch, RootfsSource, SecretsConfig, SshConfig, VolumeMount};
+
+//--------------------------------------------------------------------------------------------------
+// Constants
+//--------------------------------------------------------------------------------------------------
+
+fn default_cpus() -> u8 {
+    crate::config::config().sandbox_defaults.cpus
+}
+
+fn default_memory_mib() -> u32 {
+    crate::config::config().sandbox_defaults.memory_mib
+}
+
+fn default_log_level() -> Option<LogLevel> {
+    crate::config::config().log_level
+}
+
+//--------------------------------------------------------------------------------------------------
+// Types
+//--------------------------------------------------------------------------------------------------
+
+/// Configuration for a sandbox.
+///
+/// All config structs derive `Default` for direct construction and
+/// `Serialize`/`Deserialize` for file-based configuration.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Unique sandbox name (required).
+    pub name: String,
+
+    /// Root filesystem source (required).
+    #[serde(default)]
+    pub image: RootfsSource,
+
+    /// Number of virtual CPUs.
+    #[serde(default = "default_cpus")]
+    pub cpus: u8,
+
+    /// Guest memory in MiB.
+    #[serde(default = "default_memory_mib")]
+    pub memory_mib: u32,
+
+    /// Runtime log level for the sandbox process.
+    ///
+    /// `None` means the sandbox process stays silent.
+    #[serde(default = "default_log_level")]
+    pub log_level: Option<LogLevel>,
+
+    /// Working directory inside the sandbox.
+    #[serde(default)]
+    pub workdir: Option<String>,
+
+    /// Default shell for scripts and interactive sessions.
+    #[serde(default)]
+    pub shell: Option<String>,
+
+    /// Named scripts available at `/.msb/scripts/<name>` in the guest.
+    #[serde(default)]
+    pub scripts: HashMap<String, String>,
+
+    /// Environment variables.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+
+    /// Volume mounts.
+    #[serde(default)]
+    pub mounts: Vec<VolumeMount>,
+
+    /// Rootfs patches applied as overlay layers before VM start.
+    #[serde(default)]
+    pub patches: Vec<Patch>,
+
+    /// Network configuration.
+    #[cfg(feature = "net")]
+    #[serde(default)]
+    pub network: microsandbox_network::config::NetworkConfig,
+
+    /// Secrets configuration.
+    #[serde(default)]
+    pub secrets: SecretsConfig,
+
+    /// SSH configuration.
+    #[serde(default)]
+    pub ssh: SshConfig,
+
+    /// Image entrypoint (inherited from image config, overridable).
+    #[serde(default)]
+    pub entrypoint: Option<Vec<String>>,
+
+    /// Image default command (inherited from image config, overridable).
+    #[serde(default)]
+    pub cmd: Option<Vec<String>>,
+
+    /// Guest hostname. Defaults to the sandbox name.
+    #[serde(default)]
+    pub hostname: Option<String>,
+
+    /// User identity inside sandbox (inherited from image config, overridable).
+    #[serde(default)]
+    pub user: Option<String>,
+
+    /// Image labels (merged from image config, user labels override).
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
+
+    /// Signal for graceful shutdown (inherited from image config, overridable).
+    #[serde(default)]
+    pub stop_signal: Option<String>,
+
+    /// Pull policy for OCI images. Default: `IfMissing`.
+    #[serde(default)]
+    pub pull_policy: PullPolicy,
+
+    /// Sandbox lifecycle policy.
+    #[serde(default)]
+    pub policy: SandboxPolicy,
+
+    /// Registry authentication for private OCI registries.
+    ///
+    /// Redacted (set to `None`) before serialization to database — credentials
+    /// are only needed during the pull.
+    #[serde(default, skip_serializing)]
+    pub registry_auth: Option<RegistryAuth>,
+
+    /// Replace an existing sandbox with the same name during create.
+    ///
+    /// If the existing sandbox is still active, microsandbox stops it and
+    /// waits for it to exit before recreating it.
+    ///
+    /// This is an operation flag, not persisted sandbox state.
+    #[serde(skip)]
+    pub replace_existing: bool,
+
+    /// Resolved rootfs lower layer paths (populated at create time for OCI images).
+    ///
+    /// Sidecar indexes are discovered by naming convention in the runtime as
+    /// `<lower>.index`, so only the lower directory path is carried here.
+    /// Persisted so existing sandboxes can reuse the pinned lower stack
+    /// without re-resolving a mutable OCI reference.
+    #[serde(default)]
+    pub(crate) resolved_rootfs_layers: Vec<PathBuf>,
+}
+
+//--------------------------------------------------------------------------------------------------
+// Methods
+//--------------------------------------------------------------------------------------------------
+
+impl SandboxConfig {
+    /// Apply OCI image config as defaults. User-provided values take precedence.
+    ///
+    /// - `env`: image env vars form the base; user env vars override by key, otherwise append.
+    /// - `cmd`, `entrypoint`, `workdir`, `user`, `stop_signal`: image value used only if user did not set one.
+    /// - `labels`: image labels form the base; user labels override on key conflict.
+    pub fn merge_image_defaults(&mut self, image: &ImageConfig) {
+        self.env = merge_env(&image.env, &self.env);
+
+        if self.cmd.is_none() {
+            self.cmd = image.cmd.clone();
+        }
+        if self.entrypoint.is_none() {
+            self.entrypoint = image.entrypoint.clone();
+        }
+        if self.workdir.is_none() {
+            self.workdir = image
+                .working_dir
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+        }
+        if self.user.is_none() {
+            self.user = image
+                .user
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+        }
+        if self.stop_signal.is_none() {
+            self.stop_signal = image
+                .stop_signal
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+        }
+
+        let mut merged = image.labels.clone();
+        merged.extend(self.labels.drain());
+        self.labels = merged;
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Functions
+//--------------------------------------------------------------------------------------------------
+
+/// Merge two sets of env-var pairs. Base entries are kept unless overridden by
+/// key, then all override entries are appended.
+pub(crate) fn merge_env_pairs(
+    base: &[(String, String)],
+    overrides: &[(String, String)],
+) -> Vec<(String, String)> {
+    let override_keys: HashSet<&str> = overrides.iter().map(|(k, _)| k.as_str()).collect();
+
+    let mut merged: Vec<(String, String)> = base
+        .iter()
+        .filter(|(k, _)| !override_keys.contains(k.as_str()))
+        .cloned()
+        .collect();
+
+    merged.extend(overrides.iter().cloned());
+    merged
+}
+
+/// Merge image env vars (OCI `KEY=VALUE` strings) with user env var pairs.
+fn merge_env(image_env: &[String], user_env: &[(String, String)]) -> Vec<(String, String)> {
+    let base: Vec<(String, String)> = image_env
+        .iter()
+        .filter_map(|entry| match entry.split_once('=') {
+            Some((k, v)) => Some((k.to_string(), v.to_string())),
+            None => {
+                tracing::warn!(entry = %entry, "skipping malformed image env var (expected KEY=VALUE)");
+                None
+            }
+        })
+        .collect();
+
+    merge_env_pairs(&base, user_env)
+}
+
+//--------------------------------------------------------------------------------------------------
+// Trait Implementations
+//--------------------------------------------------------------------------------------------------
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            image: RootfsSource::default(),
+            cpus: default_cpus(),
+            memory_mib: default_memory_mib(),
+            log_level: default_log_level(),
+            workdir: None,
+            shell: None,
+            scripts: HashMap::new(),
+            env: Vec::new(),
+            mounts: Vec::new(),
+            patches: Vec::new(),
+            #[cfg(feature = "net")]
+            network: microsandbox_network::config::NetworkConfig::default(),
+            secrets: SecretsConfig::default(),
+            ssh: SshConfig::default(),
+            hostname: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            labels: HashMap::new(),
+            stop_signal: None,
+            pull_policy: PullPolicy::default(),
+            policy: SandboxPolicy::default(),
+            registry_auth: None,
+            replace_existing: false,
+            resolved_rootfs_layers: Vec::new(),
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Tests
+//--------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use microsandbox_image::{ImageConfig, RegistryAuth};
+
+    use super::{SandboxConfig, merge_env};
+
+    #[test]
+    fn test_merge_env_image_base_with_user_override() {
+        let image_env = vec![
+            "PATH=/usr/local/bin:/usr/bin".to_string(),
+            "PYTHON_VERSION=3.14".to_string(),
+        ];
+        let user_env = vec![
+            ("PATH".to_string(), "/custom/bin".to_string()),
+            ("MY_VAR".to_string(), "hello".to_string()),
+        ];
+
+        let merged = merge_env(&image_env, &user_env);
+
+        assert_eq!(
+            merged,
+            vec![
+                ("PYTHON_VERSION".to_string(), "3.14".to_string()),
+                ("PATH".to_string(), "/custom/bin".to_string()),
+                ("MY_VAR".to_string(), "hello".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_env_empty_user_inherits_image() {
+        let image_env = vec!["PATH=/usr/bin".to_string(), "LANG=C.UTF-8".to_string()];
+        let user_env = vec![];
+
+        let merged = merge_env(&image_env, &user_env);
+
+        assert_eq!(
+            merged,
+            vec![
+                ("PATH".to_string(), "/usr/bin".to_string()),
+                ("LANG".to_string(), "C.UTF-8".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_env_empty_image_keeps_user() {
+        let image_env = vec![];
+        let user_env = vec![("MY_VAR".to_string(), "val".to_string())];
+
+        let merged = merge_env(&image_env, &user_env);
+
+        assert_eq!(merged, vec![("MY_VAR".to_string(), "val".to_string())]);
+    }
+
+    #[test]
+    fn test_merge_image_defaults_replace_fields() {
+        let image = ImageConfig {
+            cmd: Some(vec!["python3".to_string()]),
+            entrypoint: Some(vec!["/entrypoint.sh".to_string()]),
+            working_dir: Some("/app".to_string()),
+            user: Some("appuser".to_string()),
+            stop_signal: Some("SIGTERM".to_string()),
+            ..Default::default()
+        };
+
+        let mut config = SandboxConfig::default();
+        config.merge_image_defaults(&image);
+
+        assert_eq!(config.cmd, Some(vec!["python3".to_string()]));
+        assert_eq!(config.entrypoint, Some(vec!["/entrypoint.sh".to_string()]));
+        assert_eq!(config.workdir, Some("/app".to_string()));
+        assert_eq!(config.user, Some("appuser".to_string()));
+        assert_eq!(config.stop_signal, Some("SIGTERM".to_string()));
+    }
+
+    #[test]
+    fn test_merge_image_defaults_user_overrides_take_precedence() {
+        let image = ImageConfig {
+            cmd: Some(vec!["python3".to_string()]),
+            entrypoint: Some(vec!["/entrypoint.sh".to_string()]),
+            working_dir: Some("/app".to_string()),
+            user: Some("appuser".to_string()),
+            stop_signal: Some("SIGTERM".to_string()),
+            ..Default::default()
+        };
+
+        let mut config = SandboxConfig {
+            cmd: Some(vec!["bash".to_string()]),
+            workdir: Some("/workspace".to_string()),
+            user: Some("root".to_string()),
+            ..Default::default()
+        };
+        config.merge_image_defaults(&image);
+
+        assert_eq!(config.cmd, Some(vec!["bash".to_string()]));
+        assert_eq!(config.entrypoint, Some(vec!["/entrypoint.sh".to_string()]));
+        assert_eq!(config.workdir, Some("/workspace".to_string()));
+        assert_eq!(config.user, Some("root".to_string()));
+        assert_eq!(config.stop_signal, Some("SIGTERM".to_string()));
+    }
+
+    #[test]
+    fn test_merge_image_defaults_labels_merged_user_wins() {
+        let image = ImageConfig {
+            labels: HashMap::from([
+                ("maintainer".to_string(), "alice".to_string()),
+                ("version".to_string(), "1.0".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let mut config = SandboxConfig {
+            labels: HashMap::from([
+                ("version".to_string(), "custom".to_string()),
+                ("my.label".to_string(), "foo".to_string()),
+            ]),
+            ..Default::default()
+        };
+        config.merge_image_defaults(&image);
+
+        assert_eq!(config.labels.get("maintainer").unwrap(), "alice");
+        assert_eq!(config.labels.get("version").unwrap(), "custom");
+        assert_eq!(config.labels.get("my.label").unwrap(), "foo");
+    }
+
+    #[test]
+    fn test_merge_image_defaults_empty_strings_treated_as_none() {
+        let image = ImageConfig {
+            working_dir: Some(String::new()),
+            user: Some(String::new()),
+            stop_signal: Some(String::new()),
+            ..Default::default()
+        };
+
+        let mut config = SandboxConfig::default();
+        config.merge_image_defaults(&image);
+
+        assert!(
+            config.workdir.is_none(),
+            "empty working_dir should not propagate"
+        );
+        assert!(config.user.is_none(), "empty user should not propagate");
+        assert!(
+            config.stop_signal.is_none(),
+            "empty stop_signal should not propagate"
+        );
+    }
+
+    #[test]
+    fn test_sandbox_config_serializes_pinned_rootfs_layers_but_redacts_registry_auth() {
+        let mut config = SandboxConfig {
+            name: "persisted".into(),
+            ..Default::default()
+        };
+        config.registry_auth = Some(RegistryAuth::Basic {
+            username: "alice".into(),
+            password: "secret".into(),
+        });
+        config.replace_existing = true;
+        config.resolved_rootfs_layers = vec!["/tmp/layer0".into(), "/tmp/layer1".into()];
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("registry_auth"));
+        assert!(!json.contains("replace_existing"));
+        assert!(json.contains("resolved_rootfs_layers"));
+
+        let decoded: SandboxConfig = serde_json::from_str(&json).unwrap();
+        assert!(decoded.registry_auth.is_none());
+        assert!(!decoded.replace_existing);
+        assert_eq!(
+            decoded.resolved_rootfs_layers,
+            config.resolved_rootfs_layers
+        );
+    }
+}

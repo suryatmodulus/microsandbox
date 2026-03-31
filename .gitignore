@@ -26,3 +26,8 @@ Sandboxfile*
 
 # Retype
 .retype/
+.claude
+
+# Node
+node_modules/
+dist/

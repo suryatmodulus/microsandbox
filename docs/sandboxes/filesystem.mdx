@@ -1,0 +1,94 @@
+---
+title: Filesystem
+description: Read and write files inside a running sandbox
+icon: "folder-open"
+---
+
+The filesystem API lets you read, write, and manage files inside a sandbox without mounting volumes or SSH. It uses the same channel as command execution, so it doesn't touch the sandbox's network.
+
+Handy for pushing generated code into a sandbox, pulling back results, or inspecting logs without having to pre-mount a shared directory.
+
+## Write a file
+
+<CodeGroup>
+```rust Rust
+sb.fs().write("/app/config.json", r#"{"debug": true}"#).await?;
+```
+
+```typescript TypeScript
+await sb.fs().write("/app/config.json", '{"debug": true}')
+```
+
+</CodeGroup>
+
+## Read a file
+
+<CodeGroup>
+```rust Rust
+let content = sb.fs().read_to_string("/app/config.json").await?;
+```
+
+```typescript TypeScript
+const content = await sb.fs().readString("/app/config.json")
+```
+
+</CodeGroup>
+
+## List a directory
+
+<CodeGroup>
+```rust Rust
+let entries = sb.fs().list("/app").await?;
+for entry in entries {
+    println!("{}: {:?}", entry.path, entry.kind);
+}
+```
+
+```typescript TypeScript
+const entries = await sb.fs().list("/app")
+for (const entry of entries) {
+    console.log(`${entry.path}: ${entry.kind}`)
+}
+```
+
+</CodeGroup>
+
+## Stream large files <sup><sup>coming soon</sup></sup>
+
+For files too large to fit in memory, use streaming. Data is transferred in chunks of approximately 3 MiB each.
+
+<CodeGroup>
+```rust Rust
+let mut stream = sb.fs().read_stream("/app/data.bin").await?;
+while let Some(chunk) = stream.next().await {
+    process(chunk?);
+}
+```
+
+```typescript TypeScript
+const stream = await sb.fs().readStream("/app/data.bin")
+for await (const chunk of stream) {
+    processChunk(chunk)
+}
+```
+
+</CodeGroup>
+
+## Copy from host
+
+Copy a file from the host machine into the sandbox in a single call.
+
+<CodeGroup>
+```rust Rust
+sb.fs().copy_from_host("./local-file.txt", "/app/remote-file.txt").await?;
+```
+
+```typescript TypeScript
+await sb.fs().copyFromHost("./local-file.txt", "/app/remote-file.txt")
+```
+
+</CodeGroup>
+
+<Tip>
+  If you need to transfer many files at once, consider using a [bind-mounted volume](/sandboxes/volumes) instead. Volumes give the guest direct filesystem access, whereas the filesystem API transfers each file individually. For bulk operations, volumes are significantly faster.
+</Tip>

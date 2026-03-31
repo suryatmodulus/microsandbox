@@ -1,11 +1,14 @@
 # Folders to ignore
 build/
 ignore/
+vendor/
 .git/
 .github/
 .menv/
 .vscode/
+.claude/
 assets/
+sdk/
 
 # Temporary and cache files
 **/*.o
@@ -30,14 +33,3 @@ target/
 **/*.env
 **/*.example
 **/*.test
-
-# Keep necessary files for cargo build
-!Cargo.toml
-!Cargo.lock
-!microsandbox-portal/
-!microsandbox-utils/
-!microsandbox-cli/
-!microsandbox-core/
-!microsandbox-server/
-!rust-toolchain.toml
-!deny.toml

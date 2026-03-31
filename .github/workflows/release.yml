@@ -1,128 +1,370 @@
-name: 🚀 Release Packages & Binaries
+name: Release
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      trigger_release:
-        description: 'Trigger release'
-        type: boolean
-        required: true
-        default: false
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  LIBKRUNFW_VERSION: "5.2.1"
+  LIBKRUNFW_ABI: "5"
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 jobs:
-  release-please:
-    runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.trigger_release == 'true' }}
-    outputs:
-      releases_created: ${{ steps.release.outputs.releases_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+  # ---------------------------------------------------------------------------
+  # Build kernel.c on Linux for macOS libkrunfw linking
+  # ---------------------------------------------------------------------------
+  build-kernel:
+    name: Build kernel.c (aarch64)
+    runs-on: ubuntu-24.04-arm
     steps:
-      - name: Setup release-please
-        uses: googleapis/release-please-action@v4
-        id: release
+      - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          submodules: true
 
-      - name: Check release status
+      - name: Cache kernel.c
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: vendor/libkrunfw/kernel.c
+          key: kernel-c-aarch64-${{ hashFiles('vendor/libkrunfw/**') }}
+
+      - name: Install kernel build deps
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev gcc make flex bison libelf-dev bc python3-pyelftools
+
+      - name: Build kernel.c
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
-          echo "Release created: ${{ steps.release.outputs.releases_created }}"
-          echo "Tag name: ${{ steps.release.outputs.tag_name }}"
+          cd vendor/libkrunfw
+          make -j$(nproc)
 
-  publish-sdk:
-    needs: release-please
-    if: ${{ needs.release-please.outputs['sdk/rust--release_created'] == 'true' }}
-    runs-on: ubuntu-latest
+      - name: Upload kernel.c
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-c-aarch64
+          path: vendor/libkrunfw/kernel.c
+
+  # ---------------------------------------------------------------------------
+  # Build agentd on Linux for macOS packaging
+  # ---------------------------------------------------------------------------
+  build-agentd-aarch64:
+    name: Build agentd (aarch64-linux-musl)
+    runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          submodules: true
 
-      - name: Publish SDK crate
-        working-directory: sdk/rust
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install agentd build deps
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build agentd
         run: |
-          echo "Publishing microsandbox SDK..."
-          if cargo publish 2>&1 | tee publish.log; then
-            echo "✓ Successfully published microsandbox SDK"
-          elif grep -q "already exists on crates.io index" publish.log; then
-            echo "⚠ microsandbox SDK already published, skipping..."
-          else
-            echo "✗ Failed to publish microsandbox SDK"
-            cat publish.log
-            exit 1
-          fi
+          rustup target add aarch64-unknown-linux-musl
+          cargo build --release --manifest-path crates/agentd/Cargo.toml --target aarch64-unknown-linux-musl
+          mkdir -p build
+          cp crates/agentd/target/aarch64-unknown-linux-musl/release/agentd build/agentd
 
-  build-and-package:
-    needs: release-please
-    if: ${{ needs.release-please.outputs['--release_created'] == 'true' }}
+      - name: Upload agentd
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentd-aarch64-linux-musl
+          path: build/agentd
+
+  # ---------------------------------------------------------------------------
+  # Build
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.target }})
+    needs: [build-kernel, build-agentd-aarch64]
+    if: always()
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-          - os: macos-26
-            target: aarch64-apple-darwin
-    runs-on: ${{ matrix.os }}
+          - target: linux-x86_64
+            runner: ubuntu-latest
+            arch: x86_64
+            os: linux
+            agentd_target: x86_64-unknown-linux-musl
+            libkrunfw_file: libkrunfw.so.5.2.1
+            libkrunfw_asset: libkrunfw-linux-x86_64.so
+            napi_target: x86_64-unknown-linux-gnu
+            node_file: microsandbox.linux-x64-gnu.node
+            npm_dir: linux-x64-gnu
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+            arch: aarch64
+            os: linux
+            agentd_target: aarch64-unknown-linux-musl
+            libkrunfw_file: libkrunfw.so.5.2.1
+            libkrunfw_asset: libkrunfw-linux-aarch64.so
+            napi_target: aarch64-unknown-linux-gnu
+            node_file: microsandbox.linux-arm64-gnu.node
+            npm_dir: linux-arm64-gnu
+          - target: darwin-aarch64
+            runner: macos-14
+            arch: aarch64
+            os: darwin
+            agentd_target: ""
+            libkrunfw_file: libkrunfw.5.dylib
+            libkrunfw_asset: libkrunfw-darwin-aarch64.dylib
+            napi_target: aarch64-apple-darwin
+            node_file: microsandbox.darwin-arm64.node
+            npm_dir: darwin-arm64
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
         with:
-          profile: minimal
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
+          submodules: true
 
-      - name: Install cross-compilation tools (Linux)
-        if: matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Extract version from tag
-        id: version
+      - uses: Swatinem/rust-cache@v2
+
+      # -- Linux build deps --
+      - name: Install build deps (Linux)
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools libcap-ng-dev gcc make flex bison libelf-dev bc python3-pyelftools libdbus-1-dev
+
+      # -- agentd (Linux: native musl) --
+      - name: Build agentd (musl)
+        if: matrix.os == 'linux'
         run: |
-          if [ -n "${{ needs.release-please.outputs.tag_name }}" ]; then
-            VERSION=${{ needs.release-please.outputs.tag_name }}
-          else
-            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          rustup target add ${{ matrix.agentd_target }}
+          cargo build --release --manifest-path crates/agentd/Cargo.toml --target ${{ matrix.agentd_target }}
+          mkdir -p build
+          cp crates/agentd/target/${{ matrix.agentd_target }}/release/agentd build/agentd
+
+      # -- agentd (macOS: download prebuilt Linux artifact) --
+      - name: Download agentd (macOS)
+        if: matrix.os == 'darwin'
+        uses: actions/download-artifact@v4
+        with:
+          name: agentd-aarch64-linux-musl
+          path: build/
+
+      # -- libkrunfw (cached) --
+      - name: Cache libkrunfw
+        id: cache-libkrunfw
+        uses: actions/cache@v4
+        with:
+          path: build/libkrunfw*
+          key: libkrunfw-${{ matrix.target }}-${{ hashFiles('vendor/libkrunfw/**') }}
+
+      - name: Build libkrunfw (Linux)
+        if: steps.cache-libkrunfw.outputs.cache-hit != 'true' && matrix.os == 'linux'
+        run: |
+          cd vendor/libkrunfw
+          make -j$(nproc)
+          cd ../..
+          mkdir -p build
+          cp vendor/libkrunfw/libkrunfw.so.${{ env.LIBKRUNFW_VERSION }} build/
+          cd build
+          ln -sf libkrunfw.so.${{ env.LIBKRUNFW_VERSION }} libkrunfw.so.${{ env.LIBKRUNFW_ABI }}
+          ln -sf libkrunfw.so.${{ env.LIBKRUNFW_ABI }} libkrunfw.so
+
+      - name: Download kernel.c (macOS)
+        if: steps.cache-libkrunfw.outputs.cache-hit != 'true' && matrix.os == 'darwin'
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-c-aarch64
+          path: vendor/libkrunfw/
+
+      - name: Build libkrunfw (macOS)
+        if: steps.cache-libkrunfw.outputs.cache-hit != 'true' && matrix.os == 'darwin'
+        run: |
+          cd vendor/libkrunfw
+          cc -fPIC -DABI_VERSION=${{ env.LIBKRUNFW_ABI }} -shared -o libkrunfw.${{ env.LIBKRUNFW_ABI }}.dylib kernel.c
+          cd ../..
+          mkdir -p build
+          cp vendor/libkrunfw/libkrunfw.${{ env.LIBKRUNFW_ABI }}.dylib build/
+          cd build
+          ln -sf libkrunfw.${{ env.LIBKRUNFW_ABI }}.dylib libkrunfw.dylib
+
+      # -- msb --
+      - name: Build msb
+        run: |
+          cargo build --release --no-default-features --features net -p microsandbox-cli
+          mkdir -p build
+          cp target/release/msb build/msb
+
+      # -- macOS codesign --
+      - name: Codesign msb
+        if: matrix.os == 'darwin'
+        run: codesign --entitlements msb-entitlements.plist --force -s - build/msb
+
+      # -- Node SDK --
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build Node SDK
+        working-directory: sdk/node-ts
+        run: |
+          npm install
+          npm run build -- --target ${{ matrix.napi_target }}
+
+      - name: Upload Node SDK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-sdk-${{ matrix.npm_dir }}
+          path: |
+            sdk/node-ts/${{ matrix.node_file }}
+            sdk/node-ts/index.cjs
+            sdk/node-ts/index.d.cts
+
+      # -- Stage release artifacts --
+      - name: Stage artifacts
+        run: |
+          mkdir -p artifacts
+
+          # Standalone msb
+          cp build/msb artifacts/msb-${{ matrix.target }}
+
+          # Standalone libkrunfw
+          cp build/${{ matrix.libkrunfw_file }} artifacts/${{ matrix.libkrunfw_asset }}
+
+          # Standalone agentd (Linux only — guest binary)
+          if [ "${{ matrix.os }}" = "linux" ]; then
+            cp build/agentd artifacts/agentd-${{ matrix.arch }}
           fi
-          echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
-          echo "Version: ${VERSION#v}"
 
-      - name: Build and package
-        run: |
-          ./scripts/package_microsandbox.sh ${{ steps.version.outputs.version }}
-        env:
-          CARGO_BUILD_TARGET: ${{ matrix.target }}
+          # Bundle: msb + libkrunfw
+          tar -czf artifacts/microsandbox-${{ matrix.target }}.tar.gz \
+            -C build msb ${{ matrix.libkrunfw_file }}
 
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v1
-        if: needs.release-please.outputs.tag_name != ''
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: |
-            build/microsandbox-*.tar.gz
-            build/microsandbox-*.tar.gz.sha256
+          name: release-${{ matrix.target }}
+          path: artifacts/
+
+  # ---------------------------------------------------------------------------
+  # Assemble: collect all artifacts, generate checksums, create GitHub release
+  # ---------------------------------------------------------------------------
+  assemble:
+    name: Assemble Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Copy install script
+        if: hashFiles('scripts/install.sh') != ''
+        run: cp scripts/install.sh release-artifacts/install.sh
+
+      - name: Generate checksums
+        working-directory: release-artifacts
+        run: sha256sum * > checksums.sha256
+
+      - name: Create GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            release-artifacts/*
+
+  # ---------------------------------------------------------------------------
+  # Publish Node SDK to npm
+  # ---------------------------------------------------------------------------
+  npm-publish:
+    name: Publish npm packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download Node SDK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: node-artifacts
+          pattern: node-sdk-*
+
+      - name: Place binaries and update generated files
+        run: |
+          # Copy .node binaries into platform packages.
+          cp node-artifacts/node-sdk-darwin-arm64/microsandbox.darwin-arm64.node sdk/node-ts/npm/darwin-arm64/
+          cp node-artifacts/node-sdk-linux-x64-gnu/microsandbox.linux-x64-gnu.node sdk/node-ts/npm/linux-x64-gnu/
+          cp node-artifacts/node-sdk-linux-arm64-gnu/microsandbox.linux-arm64-gnu.node sdk/node-ts/npm/linux-arm64-gnu/
+
+          # Copy build-generated index.cjs and index.d.cts into root package
+          # (use darwin-arm64 — all platforms produce identical JS/types).
+          cp node-artifacts/node-sdk-darwin-arm64/index.cjs sdk/node-ts/index.cjs
+          cp node-artifacts/node-sdk-darwin-arm64/index.d.cts sdk/node-ts/index.d.cts
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in darwin-arm64 linux-x64-gnu linux-arm64-gnu; do
+            echo "Publishing @superradcompany/microsandbox-$dir..."
+            cd sdk/node-ts/npm/$dir
+            npm publish --access public
+            cd ../../../..
+          done
+
+      - name: Wait for npm to index platform packages
+        run: sleep 30
+
+      - name: Publish root package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: sdk/node-ts
+        run: npm publish --access public
+
+  # ---------------------------------------------------------------------------
+  # Publish Rust crates to crates.io
+  # ---------------------------------------------------------------------------
+  crates-publish:
+    name: Publish crates
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for crate in \
+            microsandbox-utils \
+            microsandbox-protocol \
+            microsandbox-db \
+            microsandbox-migration \
+            microsandbox-image \
+            microsandbox-filesystem \
+            microsandbox-network \
+            microsandbox-runtime \
+            microsandbox \
+            microsandbox-cli; do
+            echo "Publishing $crate..."
+            cargo publish -p "$crate" --no-verify
+            sleep 60
+          done

@@ -1,98 +1,101 @@
 [workspace]
 resolver = "3"
-exclude = ["sdk/rust"]
+exclude = ["crates/agentd"]
 members = [
-    "microsandbox-cli",
-    "microsandbox-core",
-    "microsandbox-portal",
-    "microsandbox-server",
-    "microsandbox-utils",
+    "crates/cli",
+    "crates/db",
+    "crates/filesystem",
+    "crates/image",
+    "crates/microsandbox",
+    "crates/migration",
+    "crates/protocol",
+    "crates/runtime",
+    "crates/utils",
+    "examples/rust/net-basic",
+    "examples/rust/net-dns",
+    "examples/rust/net-policy",
+    "examples/rust/net-ports",
+    "examples/rust/net-secrets",
+    "examples/rust/net-tls",
+    "examples/rust/root-bind",
+    "examples/rust/root-block",
+    "examples/rust/root-oci",
+    "examples/rust/rootfs-patch",
+    "examples/rust/volume-named",
+    "sdk/node-ts",
 ]
 
 [workspace.package]
 authors = ["Team MicroSandbox <team@microsandbox.dev>"]
-repository = "https://github.com/zerocore-ai/microsandbox"
-version = "0.2.6"
+repository = "https://github.com/superradcompany/microsandbox"
+version = "0.3.7"
 license = "Apache-2.0"
 edition = "2024"
 
 [profile.release]
 codegen-units = 1
+lto = true
+strip = true
+panic = "abort"
 
 [workspace.dependencies]
 anyhow = "1.0"
 astral-tokio-tar = "0.5.6"
 async-compression = "0.4"
-async-stream = "0.3"
-async-trait = "0.1"
-axum = "0.8"
-base64 = "0.22"
 bytes = "1.9"
-cfg-if = "1.0"
+crc32c = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
+ciborium = "0.2"
 clap = { version = "4.5", features = ["color", "derive"] }
 console = "0.16"
-criterion = "0.8"
+crossbeam-queue = "0.3"
 crossterm = { version = "0.29.0", features = ["events"] }
 dirs = "6.0"
-dotenvy = "0.15"
+etherparse = "0.19"
 flate2 = "1.0"
 futures = "0.3"
-getset = "0.1"
 hex = "0.4"
+hickory-proto = "0.25"
+hickory-resolver = "0.25"
 indicatif = "0.18"
-intaglio = "1.10"
 ipnetwork = { version = "0.21.0", features = ["serde"] }
-jsonwebtoken = "9.3"
 libc = "0.2"
-microsandbox-core = { version = "0.2.6", path = "./microsandbox-core" }
-microsandbox-server = { version = "0.2.6", path = "./microsandbox-server" }
-microsandbox-utils = { version = "0.2.6", path = "./microsandbox-utils" }
-multihash = "0.19"
-multihash-codetable = "0.1"
-nfsserve = "0.10"
-nix = "0.30"                                                                # Cannot upgrade to 0.30 because pty no longer works correctly. Yet to investigate properly.
-nondestructive = { version = "0.0.28", features = ["serde"] }
+nix = "0.30"
 oci-client = "0.15"
 oci-spec = "0.8"
-once_cell = "1.19"
-pin-project-lite = "0.2.15"
-pretty-error-debug = "0.3"
-procspawn = "1.0"
-psutil = "3.3.0"
 rand = "0.9"
-regex = "1.10"
 reqwest = { version = "0.13", features = ["json", "stream"] }
-reqwest-middleware = "0.3"                                                  # Cannot upgrade to 0.4 due to https://github.com/TrueLayer/reqwest-middleware/issues/204
-reqwest-retry = "0.8"                                                       # Cannot upgrade to 0.7 due to https://github.com/TrueLayer/reqwest-middleware/issues/204
 scopeguard = "1.2"
-semver = { version = "1.0.24", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_bytes = "0.11"
 serde_json = "1.0"
-serde_yaml = "0.9"
-serial_test = "3.2.0"
 sha2 = "0.10"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
-structstruck = "0.5"
+smoltcp = { version = "0.13", default-features = false }
 tar = "0.4"
+time = "0.3"
 tempfile = "3.15"
-test-log = "0.2"
 thiserror = "2.0"
 tokio = { version = "1.42", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
-toml = "0.9"
-tower = { version = "0.5" }
-tower-http = { version = "0.6.2", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 typed-builder = "0.23"
-typed-path = "0.12"
-uuid = { version = "1.11", features = ["v4"] }
-uzers = "0.12"
-walkdir = "2.4"
 which = "8"
 xattr = "1.3"
-rstest = "0.26"
-
-[patch.crates-io]
-oci-client = { git = "https://github.com/toksdotdev/rust-oci-client.git", branch = "toks/string-impl-for-enums" }
+sea-orm = { version = "1.1", features = [
+    "macros",
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+] }
+sea-orm-migration = { version = "1.1", features = [
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+] }
+ureq = "3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+rustls-native-certs = "0.8"
+rcgen = { version = "0.13", features = ["x509-parser"] }
+lru = "0.12"
+rpassword = "7"
